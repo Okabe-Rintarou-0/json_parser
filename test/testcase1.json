@@ -1,0 +1,17 @@
+{
+  "bool": true,
+  "int": 1,
+  "double": 0.5,
+  "string": "hello, world!",
+  "list": [
+    1,
+    2,
+    {
+      "hello": "world"
+    }
+  ],
+  "dict": {
+    "int": 1,
+    "string": "string"
+  }
+}
