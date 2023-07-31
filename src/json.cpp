@@ -1,83 +1,153 @@
+#include <cassert>
+#include <charconv>
+#include <iomanip>
 #include "json.h"
 #include "utils.h"
 
 namespace json {
-    JSONObject JSONObject::parse(std::string_view json) {
-        skip_blank(json);
-        int idx = 0;
-        size_t len = json.length();
-        char c;
-        for (; idx < len; idx++) {
-            c = json[idx];
-            if (std::isdigit(c)) {
-                JSONObject value = try_parse_number(json);
-                return value;
+    std::string JSONObject::stringify(size_t indent) {
+        std::ostringstream buf;
+        _stringify(buf, indent, 0);
+        return buf.str();
+    }
+
+    void JSONObject::_stringify(std::ostringstream &buf, size_t indent, size_t depth) const {
+        switch (type()) {
+            case JSON_NULL_T:
+                buf << "null";
+                break;
+            case JSON_INT_T:
+                buf << std::to_string(std::get<int>(m_value));
+                break;
+            case JSON_DOUBLE_T:
+                buf << std::to_string(std::get<double>(m_value));
+                break;
+            case JSON_BOOL_T:
+                buf << std::boolalpha << std::get<bool>(m_value);
+                break;
+            case JSON_LIST_T: {
+                std::string indent_parent = std::string(depth * indent, ' ');
+                std::string indent_son = std::string((depth + 1) * indent, ' ');
+                buf << "[";
+                const auto &list = std::get<json_list_t>(m_value);
+                size_t list_len = list.size();
+                if (!list.empty()) {
+                    buf << '\n' << indent_son;
+                    list[0]._stringify(buf, indent, depth + 1);
+                    for (size_t i = 1; i < list_len; i++) {
+                        buf << ",\n" << indent_son;
+                        list[i]._stringify(buf, indent, depth + 1);
+                    }
+                }
+                buf << '\n' << indent_parent << ']';
+                break;
             }
+            case JSON_DICT_T: {
+                std::string indent_parent = std::string(depth * indent, ' ');
+                std::string indent_son = std::string((depth + 1) * indent, ' ');
+                buf << '{';
+                const auto &dict = std::get<json_dict_t>(m_value);
+                if (!dict.empty()) {
+                    auto iter = dict.begin();
+                    buf << '\n' << indent_son << '"' << iter->first << "\": ";
+                    iter->second._stringify(buf, indent, depth + 1);
+                    iter++;
+                    for (; iter != dict.end(); iter++) {
+                        buf << ",\n" << indent_son << '"' << iter->first << "\": ";
+                        iter->second._stringify(buf, indent, depth + 1);
+                    }
+                }
+                buf << '\n' << indent_parent << '}';
+                break;
+            }
+            case JSON_STRING_T:
+                buf << std::quoted(std::get<std::string>(m_value));
+                break;
         }
-        return {};
+    }
+
+    JSONObject JSONObject::parse(std::string_view json) {
+        auto [obj, _] = inner_parse(json);
+        JSONType type = obj.type();
+        if (type != JSON_LIST_T && type != JSON_DICT_T) {
+            throw JSONParseException("Missing opening brace or square bracket.");
+        }
+        return obj;
+    }
+
+    char JSONObject::unescaped_char(char c) {
+        switch (c) {
+            case 'n':
+                return '\n';
+            case 't':
+                return '\t';
+            case 'r':
+                return '\r';
+            default:
+                return c;
+        }
+    }
+
+    std::pair<JSONObject, size_t> JSONObject::inner_parse(std::string_view json) {
+        size_t eaten_blanks = count_blanks(json.data());
+        if (eaten_blanks == json.length()) {
+            throw JSONParseException("Invalid JSON, no content.");
+        }
+
+        json = std::string_view(json.data() + eaten_blanks);
+//        std::cout << "json: " << json << std::endl;
+
+        char c;
+        JSONObject obj;
+        size_t eaten{};
+
+        c = json[0];
+        if (std::isdigit(c)) {
+            std::tie(obj, eaten) = try_parse_number(json);
+        } else if (c == 'n') {
+            std::tie(obj, eaten) = try_parse_null(json);
+        } else if (c == 't' || c == 'f') {
+            std::tie(obj, eaten) = try_parse_bool(json);
+        } else if (c == '[') {
+            std::tie(obj, eaten) = try_parse_list(json);
+        } else if (c == '"') {
+            std::tie(obj, eaten) = try_parse_string(json);
+        } else if (c == '{') {
+            std::tie(obj, eaten) = try_parse_dict(json);
+        }
+
+        eaten_blanks += count_blanks(json.data() + eaten);
+        return {obj, eaten_blanks + eaten};
     }
 
     JSONObject::JSONObject(json::value_t &&v) : m_value(v) {}
 
     JSONObject::JSONObject() : JSONObject(nullptr) {}
 
-    JSONObject JSONObject::try_parse_number(std::string_view &json) {
-        int idx = 0;
-        int sign = 1;
-        int integer_part = 0;
-        int decimal_part = 0;
-        int decimal_cnt = 0;
-        char c;
-        value_t v;
+    std::pair<JSONObject, size_t> JSONObject::try_parse_number(std::string_view json) {
+        double decimal{};
+        int integral{};
 
-        if (json[0] == '-') {
-            idx++;
-            sign = -1;
+        auto result = std::from_chars(json.data(), json.data() + json.length(), decimal);
+        if (result.ec == std::errc{}) {
+            return {JSONObject{decimal}, result.ptr - json.data()};
         }
 
-        while ((c = json[idx]) >= '0' && c <= '9') {
-            integer_part = integer_part * 10 + c - '0';
-            idx++;
+        result = std::from_chars(json.data(), json.data() + json.length(), integral);
+        if (result.ec == std::errc{}) {
+            return {JSONObject{integral}, result.ptr - json.data()};
         }
 
-        if (c == ',' || c == '\0' || c == '}') {
-            // it is an integer
-            json = std::string_view(json.data() + idx);
-            v = integer_part * sign;
-            return JSONObject{std::move(v)};
-        }
-        if (c != '.') {
-            // meet invalid character
-            goto error;
-        }
-
-        idx++;
-        while (std::isdigit(c = json[idx])) {
-            decimal_part = decimal_part * 10 + c - '0';
-            idx++;
-            decimal_cnt++;
-        }
-
-        if (c != ',' && c != '\0' && c != '}') {
-            goto error;
-        }
-
-        json = std::string_view(json.data() + idx);
-        v = (integer_part + decimal_part / pow10(decimal_cnt)) * sign;
-        return JSONObject{std::move(v)};
-
-        error:
-        std::string error_msg = "Unexpected character \" \"";
-        error_msg[error_msg.length() - 2] = c;
-        throw JSONParseException(std::move(error_msg));
+//        std::error_code ec = std::make_error_code(result.ec);
+        throw JSONParseException("Error occurs when parsing a number");
     }
 
-    void JSONObject::skip_blank(std::string_view &json) {
-        const char *str = json.data();
+    size_t JSONObject::count_blanks(const char *json) {
+        const char *str = json;
         while (std::isspace(*str)) {
             str++;
         }
-        json = std::string_view(json.data() + (str - json.data()));
+        return str - json;
     }
 
     std::ostream &operator<<(std::ostream &os, const JSONObject &obj) {
@@ -94,10 +164,197 @@ namespace json {
                 break;
             case JSON_NULL_T:
                 os << "null";
+                break;
+            case JSON_STRING_T:
+                os << std::quoted(std::get<std::string>(obj.m_value));
+                break;
+            case JSON_LIST_T: {
+                os << "[";
+                const auto &list = std::get<json_list_t>(obj.m_value);
+                size_t list_len = list.size();
+                if (!list.empty()) {
+                    os << list[0];
+                    for (size_t i = 1; i < list_len; i++) {
+                        os << ", " << list[i];
+                    }
+                }
+                os << "]";
+                break;
+            }
+            case JSON_DICT_T: {
+                os << "{";
+                const auto &dict = std::get<json_dict_t>(obj.m_value);
+                if (!dict.empty()) {
+                    auto iter = dict.begin();
+                    std::cout << '"' << iter->first << "\": " << iter->second;
+                    iter++;
+                    for (; iter != dict.end(); iter++) {
+                        std::cout << ",\"" << iter->first << "\": " << iter->second;
+                    }
+                }
+                os << "}";
+                break;
+            }
             default:
                 break;
         }
         return os;
+    }
+
+    std::pair<JSONObject, size_t> JSONObject::try_parse_null(std::string_view json) {
+        std::string_view alpha = read_alpha(json);
+        if (alpha == "null") {
+            return {JSONObject{nullptr}, 4};
+        }
+        throw JSONParseException("Missing value for key");
+    }
+
+    std::pair<JSONObject, size_t> JSONObject::try_parse_bool(std::string_view json) {
+        std::string_view alpha = read_alpha(json);
+        if (alpha != "true" && alpha != "false") {
+            throw JSONParseException("Missing value for key");
+        }
+        return {JSONObject{alpha == "true"}, alpha.length()};
+    }
+
+    std::string_view JSONObject::read_alpha(std::string_view json) {
+        const char *str = json.data();
+        while (std::isalpha(*str)) {
+            str++;
+        }
+        size_t len = str - json.data();
+        std::string_view alpha(json.data(), len);
+        return alpha;
+    }
+
+    std::pair<JSONObject, size_t> JSONObject::try_parse_list(std::string_view json) {
+        assert(json[0] == '[');
+        char begin;
+        std::vector<JSONObject> list;
+        size_t total_eaten{};
+        while ((begin = json[0]) != '\0' && begin != ']') {
+            json = std::string_view(json.data() + 1);
+            auto [obj, eaten] = JSONObject::inner_parse(json);
+//            std::cout << "list item: " << obj << std::endl;
+            json = std::string_view(json.data() + eaten);
+            total_eaten += eaten + 1;
+
+            begin = json[0];
+            if (begin != ',' && begin != ']') {
+                throw JSONParseException("Unexpected character '" + std::string(1, begin) + "'");
+            }
+            list.push_back(obj);
+        }
+        if (begin != ']') {
+            throw JSONParseException("Missing bracket ']'");
+        }
+
+        // eat ']'
+        total_eaten++;
+        return {JSONObject{std::move(list)}, total_eaten};
+    }
+
+    std::pair<JSONObject, size_t> JSONObject::try_parse_string(std::string_view json) {
+        auto [str, eaten] = _try_parse_string(json);
+        return {JSONObject{std::move(str)}, eaten};
+    }
+
+    std::pair<std::string, size_t> JSONObject::_try_parse_string(std::string_view json) {
+        enum {
+            Raw,
+            Escaped
+        } phase = Raw;
+
+        assert(json[0] == '"');
+        const char *str = json.data() + 1;
+        char c;
+        std::string buf;
+        while ((c = *str) != '\0') {
+            if (phase == Raw) {
+                if (c == '\\') {
+                    phase = Escaped;
+                } else if (c == '"') {
+                    break;
+                } else {
+                    buf += c;
+                }
+            } else {
+                buf += unescaped_char(c);
+                phase = Raw;
+            }
+//            std::cout << "buf: " << buf << std::endl;
+            str++;
+        }
+        if (c == '\0') {
+            throw JSONParseException("EOF: No close string '\"' found.");
+        }
+        return {buf, (str - json.data()) + 1};
+    }
+
+    std::pair<JSONObject, size_t> JSONObject::try_parse_dict(std::string_view json) {
+        assert(json[0] == '{');
+        // eat '{' first;
+        size_t total_eaten{};
+        char c;
+        json_dict_t dict{};
+        std::string key;
+        JSONObject value;
+        size_t eaten;
+        size_t eaten_blanks;
+        while ((c = json[0]) != '\0' && c != '}') {
+            // parse key
+            eaten_blanks = count_blanks(json.data() + 1);
+            json = std::string_view(json.data() + 1 + eaten_blanks);
+            total_eaten += 1 + eaten_blanks;
+
+            if (json[0] != '"') {
+                throw JSONParseException("Key must be quoted");
+            }
+
+            std::tie(key, eaten) = _try_parse_string(json);
+            total_eaten += eaten;
+
+            if ((c = json[eaten]) != ':') {
+                throw JSONParseException("Unexpected Character '" + std::string(1, c) + "', expecting a semicolon.");
+            }
+            // eat ':'
+            total_eaten++;
+
+            // parse value
+            json = std::string_view(json.data() + eaten + 1);
+            std::tie(value, eaten) = inner_parse(json);
+            total_eaten += eaten;
+
+            if ((c = json[eaten]) != ',' && c != '}') {
+                throw JSONParseException("Unexpected character '" + std::string(1, c) + "'");
+            }
+
+//            std::cout << "put " << key << " -> " << value << std::endl;
+
+            dict[std::move(key)] = std::move(value);
+            json = std::string_view(json.data() + eaten);
+        }
+
+        // eat '}'
+        total_eaten++;
+
+        return {JSONObject{dict}, total_eaten};
+    }
+
+    JSONObject &JSONObject::operator[](const std::string &key) {
+        if (type() == JSON_DICT_T) {
+            return std::get<json_dict_t>(m_value)[key];
+        }
+
+        throw std::runtime_error("Invalid operation: The JSON object is not a dictionary.");
+    }
+
+    JSONObject &JSONObject::operator[](size_t index) {
+        if (type() == JSON_LIST_T) {
+            return std::get<json_list_t>(m_value).at(index);
+        }
+
+        throw std::runtime_error("Invalid operation: The JSON object is not a list.");
     }
 
     const char *JSONParseException::what() const noexcept {

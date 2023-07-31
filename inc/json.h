@@ -6,6 +6,7 @@
 #include <string>
 #include <iostream>
 #include <unordered_map>
+#include <sstream>
 
 namespace json {
     class JSONObject;
@@ -43,10 +44,41 @@ namespace json {
 
         static JSONObject parse(std::string_view json);
 
-    private:
-        static void skip_blank(std::string_view &json);
+        std::string stringify(size_t indent);
 
-        static JSONObject try_parse_number(std::string_view &json);
+        template<typename T>
+        inline T as();
+
+        inline JSONType type() const;
+
+        JSONObject &operator[](const std::string &key);
+
+        JSONObject &operator[](size_t index);
+
+    private:
+        static std::pair<JSONObject, size_t> inner_parse(std::string_view json);
+
+        static size_t count_blanks(const char *json);
+
+        static char unescaped_char(char c);
+
+        void _stringify(std::ostringstream &buf, size_t indent, size_t depth) const;
+
+        static std::pair<JSONObject, size_t> try_parse_number(std::string_view json);
+
+        static std::pair<JSONObject, size_t> try_parse_null(std::string_view json);
+
+        static std::pair<JSONObject, size_t> try_parse_bool(std::string_view json);
+
+        static std::pair<JSONObject, size_t> try_parse_list(std::string_view json);
+
+        static std::pair<std::string, size_t> _try_parse_string(std::string_view json);
+
+        static std::pair<JSONObject, size_t> try_parse_string(std::string_view json);
+
+        static std::pair<JSONObject, size_t> try_parse_dict(std::string_view json);
+
+        static std::string_view read_alpha(std::string_view json);
 
         friend std::ostream &operator<<(std::ostream &os, const JSONObject &obj);
     };
@@ -59,6 +91,15 @@ namespace json {
 
         [[nodiscard]] const char *what() const noexcept override;
     };
+
+    template<class T>
+    T JSONObject::as() {
+        return std::get<T>(m_value);
+    }
+
+    JSONType JSONObject::type() const {
+        return JSONType(m_value.index());
+    }
 }
 
 #endif //JSON_PARSER_JSON_H
