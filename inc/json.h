@@ -7,6 +7,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <sstream>
+#include <unordered_set>
 
 namespace json {
     class JSONObject;
@@ -49,7 +50,13 @@ namespace json {
         template<typename T>
         inline T as();
 
-        inline JSONType type() const;
+        [[nodiscard]] inline JSONType type() const;
+
+        [[nodiscard]] inline size_t size() const;
+
+        [[nodiscard]] inline bool containsKey(const std::string &key);
+
+        std::unordered_set<std::string> keySet();
 
         JSONObject &operator[](const std::string &key);
 
@@ -99,6 +106,21 @@ namespace json {
 
     JSONType JSONObject::type() const {
         return JSONType(m_value.index());
+    }
+
+    size_t JSONObject::size() const {
+        switch (type()) {
+            case JSON_DICT_T:
+                return std::get<json_dict_t>(m_value).size();
+            case JSON_LIST_T:
+                return std::get<json_list_t>(m_value).size();
+            default:
+                return 0;
+        }
+    }
+
+    bool JSONObject::containsKey(const std::string &key) {
+        return type() == JSON_DICT_T && std::get<json_dict_t>(m_value).count(key) > 0;
     }
 }
 

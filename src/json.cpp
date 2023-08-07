@@ -349,6 +349,17 @@ namespace json {
         throw std::runtime_error("Invalid operation: The JSON object is not a dictionary.");
     }
 
+    std::unordered_set<std::string> JSONObject::keySet() {
+        std::unordered_set<std::string> set;
+        if (type() == JSON_DICT_T) {
+            const auto &dict = std::get<json_dict_t>(m_value);
+            for (const auto &[key, obj]: dict) {
+                set.emplace(key);
+            }
+        }
+        return set;
+    }
+
     JSONObject &JSONObject::operator[](size_t index) {
         if (type() == JSON_LIST_T) {
             return std::get<json_list_t>(m_value).at(index);

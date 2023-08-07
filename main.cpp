@@ -9,6 +9,9 @@ int main() {
     std::cout << obj1["list"][2]["hello"] << std::endl;
     std::cout << obj1.stringify(4) << std::endl;
     std::cout << obj1.stringify(2) << std::endl;
+    std::cout << obj1.size() << std::endl;
+    std::cout << std::boolalpha << obj1.containsKey("list") << std::endl;
+    std::cout << std::boolalpha << obj1.containsKey("unknown") << std::endl;
     json::JSONObject obj2 = json::JSONObject::parse("[false]");
     std::cout << obj2 << std::endl;
 //    json::JSONObject obj3 = json::JSONObject::parse(" true");
